@@ -3847,6 +3847,22 @@ class NetworkdNetworkTests(unittest.TestCase, Utilities):
         print(output)
         self.assertIn('104:	from 10.1.0.0/16 iif test1 lookup 12 nop', output)
 
+        output = check_output('ip rule list to 192.0.2.0/26')
+        print(output)
+        self.assertIn('to 192.0.2.0/26 lookup 1001', output)
+
+        output = check_output('ip rule list to 192.0.2.64/26')
+        print(output)
+        self.assertIn('to 192.0.2.64/26 lookup 1001', output)
+
+        output = check_output('ip rule list to 192.0.2.128/26')
+        print(output)
+        self.assertIn('to 192.0.2.128/26 lookup 1001', output)
+
+        output = check_output('ip rule list to 192.0.2.192/26')
+        print(output)
+        self.assertIn('to 192.0.2.192/26 lookup 1001', output)
+
     def check_routing_policy_rule_dummy98(self):
         print('### Checking routing policy rules requested by dummy98')
 
@@ -3982,6 +3998,45 @@ class NetworkdNetworkTests(unittest.TestCase, Utilities):
         output = check_output('ip -6 rule list table 1011')
         print(output)
         self.assertIn('10113:	from all iif test1 lookup 1011', output)
+
+    def test_routing_policy_rule_manual(self):
+        # For issue #36244.
+        copy_network_unit(
+            '11-dummy.netdev',
+            '25-routing-policy-rule-manual.network')
+        start_networkd()
+        self.wait_operstate('test1', operstate='off', setup_state='configuring', setup_timeout=20)
+
+        check_output('ip link add test2 type dummy')
+        self.wait_operstate('test2', operstate='off', setup_state='configuring', setup_timeout=20)
+
+        networkctl('up', 'test2')
+        self.wait_online('test2:degraded')
+
+        # The request for the routing policy rules are bound to test1. Hence, we need to wait for the rules
+        # being configured explicitly.
+        for _ in range(20):
+            time.sleep(0.5)
+
+            output = check_output('ip -4 rule list table 51819')
+            if output != '10:	from all lookup 51819 suppress_prefixlength 0 proto static':
+                continue
+
+            output = check_output('ip -6 rule list table 51819')
+            if output != '10:	from all lookup 51819 suppress_prefixlength 0 proto static':
+                continue
+
+            output = check_output('ip -4 rule list table 51820')
+            if output != '11:	not from all fwmark 0x38f lookup 51820 proto static':
+                continue
+
+            output = check_output('ip -6 rule list table 51820')
+            if output != '11:	not from all fwmark 0x38f lookup 51820 proto static':
+                continue
+
+            break
+        else:
+            self.assertFalse(True)
 
     @expectedFailureIfRoutingPolicyPortRangeIsNotAvailable()
     def test_routing_policy_rule_port_range(self):
@@ -7247,7 +7302,14 @@ class NetworkdDHCPClientTests(unittest.TestCase, Utilities):
         self.assertRegex(output, f'192.168.5.1 proto dhcp scope link src {address1} metric 24')
         self.assertRegex(output, f'192.168.5.6 proto dhcp scope link src {address1} metric 24')
         self.assertRegex(output, f'192.168.5.7 proto dhcp scope link src {address1} metric 24')
-        self.assertIn('10.0.0.0/8 via 192.168.5.1 proto dhcp', output)
+        self.assertRegex(output, f'192.0.2.0/24 via 192.168.5.1 proto dhcp src {address1}')
+
+        print('## ip route show table 212 dev veth99')
+        output = check_output('ip route show table 212 dev veth99')
+        print(output)
+        self.assertRegex(output, f'192.168.5.0/24 proto dhcp scope link src {address1} metric 24')
+        self.assertRegex(output, f'192.168.5.1 proto dhcp scope link src {address1} metric 24')
+        self.assertRegex(output, f'198.51.100.0/24 via 192.168.5.1 proto dhcp src {address1}')
 
         print('## link state file')
         output = read_link_state_file('veth99')
@@ -7347,7 +7409,14 @@ class NetworkdDHCPClientTests(unittest.TestCase, Utilities):
         self.assertNotIn('192.168.5.6', output)
         self.assertRegex(output, f'192.168.5.7 proto dhcp scope link src {address2} metric 24')
         self.assertRegex(output, f'192.168.5.8 proto dhcp scope link src {address2} metric 24')
-        self.assertIn('10.0.0.0/8 via 192.168.5.1 proto dhcp', output)
+        self.assertRegex(output, f'192.0.2.0/24 via 192.168.5.1 proto dhcp src {address2}')
+
+        print('## ip route show table 212 dev veth99')
+        output = check_output('ip route show table 212 dev veth99')
+        print(output)
+        self.assertRegex(output, f'192.168.5.0/24 proto dhcp scope link src {address2} metric 24')
+        self.assertRegex(output, f'192.168.5.1 proto dhcp scope link src {address2} metric 24')
+        self.assertRegex(output, f'198.51.100.0/24 via 192.168.5.1 proto dhcp src {address2}')
 
         print('## link state file')
         output = read_link_state_file('veth99')
@@ -7415,6 +7484,11 @@ class NetworkdDHCPClientTests(unittest.TestCase, Utilities):
 
         print('## ip route show table 211 dev veth99')
         output = check_output('ip route show table 211 dev veth99')
+        print(output)
+        self.assertNotIn(f'{address2}', output)
+
+        print('## ip route show table 212 dev veth99')
+        output = check_output('ip route show table 212 dev veth99')
         print(output)
         self.assertNotIn(f'{address2}', output)
 
